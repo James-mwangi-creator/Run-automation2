@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid Engine - Python Automation</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#6366f1">
+    
+    <!-- Pyodide -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+    
+    <!-- Engine Scripts - ORDER MATTERS -->
+    <script src="engine/script-storage.js"></script>
+    <script src="engine/marketplace-client.js"></script>
+    <script src="engine/hybrid-engine.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 24px;
+            padding: 32px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 32px;
+            font-size: 16px;
+        }
+        .status {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            border-left: 4px solid #6366f1;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .status.success {
+            background: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+            color: #721c24;
+        }
+        .install-btn {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 24px;
+            display: none;
+            width: 100%;
+            font-size: 16px;
+        }
+        .install-btn.show {
+            display: block;
+        }
+        .log {
+            background: #1e1e1e;
+            color: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            font-family: 'Courier New', Consolas, monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+        .log-success { color: #69db7e; }
+        .log-error { color: #ff6b6b; }
+        .log-info { color: #61dafb; }
+        .test-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 16px;
+            width: 100%;
+            font-size: 16px;
+        }
+        .test-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ Hybrid Engine</h1>
+        <div class="subtitle">Python automation in your pocket • 100% offline capable</div>
+        
+        <button id="installBtn" class="install-btn">
+            📲 Install App (Offline Ready)
+        </button>
+        
+        <div id="status" class="status">
+            ⏳ Initializing engine...
+        </div>
+        
+        <button id="testBtn" class="test-btn" disabled>
+            🚀 Run Test Script
+        </button>
+        
+        <div id="log" class="log">
+            Waiting for engine to start...
+        </div>
+    </div>
+
+    <script>
+        'use strict';
+
+        // DOM Elements
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('log');
+        const testBtn = document.getElementById('testBtn');
+        
+        let engine = null;
+
+        // Logger
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = type === 'success' ? 'log-success' : type === 'error' ? 'log-error' : 'log-info';
+            line.textContent = `[${timestamp}] ${message}`;
+            logEl.appendChild(line);
+            logEl.scrollTop = logEl.scrollHeight;
+            console.log(`[${type}]`, message);
+        }
+
+        // PWA Install Prompt
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('installBtn').classList.add('show');
+            
+            document.getElementById('installBtn').addEventListener('click', async () => {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                log(`📲 App installation ${outcome}`, 'success');
+                deferredPrompt = null;
+                document.getElementById('installBtn').classList.remove('show');
+            });
+        });
+
+        // Verify dependencies
+        function verifyDependencies() {
+            const deps = {
+                'ScriptStorage': window.ScriptStorage,
+                'MarketplaceClient': window.MarketplaceClient,
+                'HybridEngine': window.HybridEngine,
+                'loadPyodide': window.loadPyodide
+            };
+
+            let allGood = true;
+            for (const [name, obj] of Object.entries(deps)) {
+                if (typeof obj === 'undefined') {
+                    log(`❌ Missing: ${name}`, 'error');
+                    allGood = false;
+                } else {
+                    log(`✅ Found: ${name}`, 'success');
+                }
+            }
+            return allGood;
+        }
+
+        // Initialize Engine
+        async function initEngine() {
+            try {
+                log('🚀 Initializing Hybrid Engine...');
+                statusEl.textContent = '⏳ Loading engine components...';
+
+                // Verify dependencies
+                if (!verifyDependencies()) {
+                    throw new Error('Missing dependencies. Check console.');
+                }
+
+                // Create engine instance
+                engine = new window.HybridEngine({
+                    pyodideLoader: window.loadPyodide,
+                    fullStdLib: false
+                });
+
+                statusEl.textContent = '⏳ Loading Python runtime (10-20 seconds)...';
+                log('⏳ This is the slowest part. Please wait...', 'info');
+
+                // Initialize Pyodide
+                await engine.init();
+
+                statusEl.textContent = '✅ Engine ready!';
+                statusEl.classList.add('success');
+                log('✅ Hybrid Engine initialized successfully!', 'success');
+                
+                // Enable test button
+                testBtn.disabled = false;
+                
+                // Install default test script
+                log('📦 Installing test script...', 'info');
+                await engine.installScript('hello-world', {
+                    name: 'Hello World',
+                    description: 'Simple test script',
+                    author: 'Hybrid Engine',
+                    main: 'main',
+                    code: `
+def main(input):
+    name = input.get('name', 'World')
+    return {
+        'message': f'Hello {name}!',
+        'timestamp': '2024-01-15',
+        'status': 'success'
+    }
+`
+                });
+                log('✅ Test script installed', 'success');
+
+            } catch (error) {
+                statusEl.textContent = '❌ Engine failed to start';
+                statusEl.classList.add('error');
+                log(`❌ Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        // Run test script
+        async function runTest() {
+            if (!engine) {
+                log('❌ Engine not initialized', 'error');
+                return;
+            }
+
+            try {
+                testBtn.disabled = true;
+                testBtn.textContent = '⚡ Running...';
+                
+                log('🧪 Running test script...', 'info');
+                const result = await engine.runScript('hello-world', { 
+                    name: 'Engine Test' 
+                });
+                
+                log(`✅ Test result: ${JSON.stringify(result, null, 2)}`, 'success');
+                
+            } catch (error) {
+                log(`❌ Test failed: ${error.message}`, 'error');
+            } finally {
+                testBtn.disabled = false;
+                testBtn.textContent = '🚀 Run Test Script';
+            }
+        }
+
+        // Event listeners
+        testBtn.addEventListener('click', runTest);
+
+        // Start everything
+        window.addEventListener('load', initEngine);
+    </script>
+</body>
+</html>
